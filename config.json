@@ -1,0 +1,34 @@
+{
+  "log_channel_id": 818314886895501345,
+  "events": {
+    "// --- Member Events ---": "--------------------",
+    "on_member_join": true,
+    "on_member_remove": true,
+    "on_member_update": true,
+    "on_user_update": true,
+    "on_member_ban": true,
+    "on_member_unban": true,
+
+    "// --- Message Events ---": "--------------------",
+    "on_message_edit": true,
+    "on_message_delete": true,
+    "on_bulk_message_delete": true,
+
+    "// --- Role Events ---": "--------------------",
+    "on_guild_role_create": true,
+    "on_guild_role_delete": true,
+    "on_guild_role_update": true,
+
+    "// --- Channel Events ---": "--------------------",
+    "on_guild_channel_create": true,
+    "on_guild_channel_delete": true,
+    "on_guild_channel_update": true,
+
+    "// --- Voice Channel Events ---": "--------------------",
+    "on_voice_state_update": true
+  }
+  ,
+  "admin_role_ids": [1423817157095198830],
+  "health_host": "0.0.0.0",
+  "health_port": 8080
+}

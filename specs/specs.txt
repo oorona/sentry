@@ -1,0 +1,74 @@
+# Project Requirements Document: Discord Logging Platform
+
+## 1.0 Project Overview
+
+The objective of this project is to develop a robust, configurable, and scalable platform for logging events from a Discord server. The system will consist of a Discord bot, a persistent database, and a secure web-based user interface for viewing logs. The entire platform will be containerized for portability and ease of deployment.
+
+***
+
+## 2.0 Functional Requirements
+
+These requirements define what the system must do.
+
+* **FR-1: Event Capture**
+    The system shall connect to the Discord API and capture a predefined set of server events, including but not limited to member joins/leaves, message edits/deletes, and role updates.
+
+* **FR-2: Dynamic Event Configuration**
+    The specific events to be logged shall be configurable via an external JSON file (`config.json`). An administrator must be able to enable or disable event logging by modifying this file without changing the application's code.
+
+* **FR-3: Dual-Destination Logging**
+    For each captured event, a log entry shall be:
+    1.  Sent as an embed message to a designated Discord channel.
+    2.  Persisted as a structured record in the database.
+
+* **FR-4: Structured Data Storage for Complex Events**
+    For events involving a state change (e.g., a message edit), the system shall store both the "before" and "after" states in a structured (`JSON`) format in the database.
+
+* **FR-5: Web User Interface (UI)**
+    A web-based UI shall be provided to display the persisted logs. The UI must support pagination to handle large volumes of data.
+
+* **FR-6: UI Authentication**
+    Access to the web UI shall be protected by a username and password authentication system. Credentials for this system will be stored externally.
+
+* **FR-7: Automated Data Purging**
+    The system shall automatically and on a regular schedule (daily) delete log records from the database that are older than a configurable number of days. This retention period will be defined in the `config.json` file.
+
+* **FR-8: Live Configuration Reload**
+    The system shall provide a Discord chat command for server administrators to reload the `config.json` file without requiring an application restart.
+
+***
+
+## 3.0 Non-Functional Requirements
+
+These requirements define the quality attributes and constraints of the system.
+
+* **NFR-1: Containerization**
+    All application components (bot, web server) shall be containerized using **Docker**. The deployment and management of these containers shall be orchestrated using **Docker Compose**.
+
+* **NFR-2: Decoupled Architecture**
+    The PostgreSQL database shall operate as a separate, standalone Docker Compose project. The application and database projects will communicate over a shared, user-defined Docker network.
+
+* **NFR-3: Security**
+    All sensitive information—including the Discord bot token, database credentials, and web UI credentials—shall be managed outside of version control in a `.env` file.
+
+* **NFR-4: Data Persistence**
+    The PostgreSQL database data must be stored in a persistent Docker volume to ensure data is not lost when the container is stopped, restarted, or recreated.
+
+* **NFR-5: Code Modularity**
+    The Discord bot's source code shall be organized into a modular structure using the `cogs` pattern to ensure separation of concerns and maintainability.
+
+* **NFR-6: Documentation**
+    The project must include a comprehensive `README.md` file that details the system architecture, setup instructions, and operational procedures.
+
+***
+
+## 4.0 Technical Stack
+
+* **Backend**: Python 3.10+
+* **Discord API Wrapper**: Py-cord
+* **Database ORM**: SQLAlchemy
+* **Web Framework**: Flask
+* **WSGI Server**: Gunicorn
+* **Task Scheduler**: APScheduler
+* **Database**: PostgreSQL 15+
+* **Deployment**: Docker & Docker Compose

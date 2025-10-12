@@ -1,0 +1,6 @@
+# requirements.txt
+discord.py
+python-dotenv
+SQLAlchemy
+psycopg2-binary
+aiohttp

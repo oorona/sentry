@@ -1,0 +1,16 @@
+# docker-compose.yml
+services:
+  sentry:
+    build: .
+    container_name: sentry
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./config.json:/app/config.json 
+    networks:
+      - dbnet
+
+networks:
+  dbnet:
+    external: true 

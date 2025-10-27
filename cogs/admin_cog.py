@@ -5,6 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 import aiohttp
 import importlib
+from datetime import datetime
 
 
 class AdminCog(commands.Cog):
@@ -103,9 +104,9 @@ class AdminCog(commands.Cog):
         except Exception as e:
             return False, str(e)
 
-    @app_commands.command(name="status", description="Show service status (HTTP + DB)")
+    @app_commands.command(name="status", description="Show comprehensive service status (System + DB + Health)")
     async def status(self, interaction: discord.Interaction):
-        """Status slash command restricted to configured admin roles."""
+        """Enhanced status slash command with comprehensive system information."""
         member = interaction.user
         if not isinstance(member, discord.Member):
             await interaction.response.send_message("Command must be used in a guild by a member.", ephemeral=True)
@@ -117,28 +118,249 @@ class AdminCog(commands.Cog):
 
         await interaction.response.defer(thinking=True)
 
-        # Check HTTP health endpoint first (internal network)
+        try:
+            # Use the bot's comprehensive status embed
+            embed = await self.bot._build_status_embed(
+                title="Sentry Bot Status", 
+                event="Status Check", 
+                extra={
+                    "Solicitado por": str(member),
+                    "Tipo de consulta": "Manual"
+                }
+            )
+            
+            # Send response to user
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            
+            # Also send notification to the notification channel
+            await self._send_notify_embed(embed)
+            
+        except Exception as e:
+            logger.error(f"Failed to generate status embed: {e}")
+            # Fallback to basic status if enhanced embed fails
+            embed = discord.Embed(title="Sentry Status (Basic)", color=discord.Color.yellow())
+            embed.add_field(name="Error", value=f"Failed to generate full status: {e}", inline=False)
+            embed.add_field(name="Bot Status", value="Online", inline=True)
+            embed.add_field(name="Guilds", value=str(len(self.bot.guilds)), inline=True)
+            embed.set_footer(text=f"Requested by {member}")
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await self._send_notify_embed(embed)
+
+    @app_commands.command(name="health", description="Check detailed health status including HTTP endpoints")
+    async def health(self, interaction: discord.Interaction):
+        """Check comprehensive health status including HTTP health endpoints."""
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            await interaction.response.send_message("Command must be used in a guild by a member.", ephemeral=True)
+            return
+
+        if not self._is_authorized(member):
+            await interaction.response.send_message("You are not authorized to run this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        # Check all health endpoints
         host = self.bot.config.get("health_host", "127.0.0.1")
         port = self.bot.config.get("health_port", 8080)
-        url = f"http://{host}:{port}/health"
-        http_status = "unknown"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=5) as resp:
-                    http_status = f"{resp.status} {await resp.text()}"
-        except Exception as e:
-            http_status = f"error: {e}"
-
-        db_ok, db_err = await self.bot.loop.run_in_executor(None, self._check_db)
-
-        embed = discord.Embed(title="Sentry Status", color=discord.Color.blue())
-        embed.add_field(name="HTTP /health", value=http_status, inline=False)
-        embed.add_field(name="Database", value=("ok" if db_ok else f"error: {db_err}"), inline=False)
-        embed.set_footer(text=f"Requested by {member}")
-
+        
+        endpoints = {
+            "General Health": f"http://{host}:{port}/health",
+            "Readiness": f"http://{host}:{port}/health/ready", 
+            "Liveness": f"http://{host}:{port}/health/live"
+        }
+        
+        embed = discord.Embed(
+            title="🏥 Sentry Health Check", 
+            description="Comprehensive health status check",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        
+        all_healthy = True
+        
+        for endpoint_name, url in endpoints.items():
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=10) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            status_emoji = "✅"
+                            status_text = f"**Status:** {data.get('status', 'ok')}"
+                            
+                            # Add extra details for comprehensive health check
+                            if endpoint_name == "General Health" and 'database' in data:
+                                db_info = data['database']
+                                system_info = data.get('system', {})
+                                status_text += f"\n**DB:** {db_info.get('status', 'unknown')}"
+                                status_text += f"\n**Events:** {db_info.get('event_count', 0):,}"
+                                status_text += f"\n**Memory:** {system_info.get('memory_mb', 0):.1f} MB"
+                                status_text += f"\n**CPU:** {system_info.get('cpu_percent', 0):.1f}%"
+                            elif 'uptime_seconds' in data:
+                                uptime = data['uptime_seconds']
+                                if uptime < 60:
+                                    uptime_str = f"{uptime}s"
+                                elif uptime < 3600:
+                                    uptime_str = f"{uptime//60}m {uptime%60}s"
+                                else:
+                                    hours = uptime // 3600
+                                    minutes = (uptime % 3600) // 60
+                                    uptime_str = f"{hours}h {minutes}m"
+                                status_text += f"\n**Uptime:** {uptime_str}"
+                        else:
+                            status_emoji = "❌"
+                            status_text = f"**Status:** HTTP {resp.status}"
+                            all_healthy = False
+                            
+            except Exception as e:
+                status_emoji = "🔥"
+                status_text = f"**Error:** {str(e)[:100]}"
+                all_healthy = False
+            
+            embed.add_field(
+                name=f"{status_emoji} {endpoint_name}",
+                value=status_text,
+                inline=True
+            )
+        
+        # Add overall status
+        if all_healthy:
+            embed.color = discord.Color.green()
+            embed.add_field(
+                name="🎯 Estado General", 
+                value="**Todos los servicios están funcionando correctamente**",
+                inline=False
+            )
+        else:
+            embed.color = discord.Color.red()
+            embed.add_field(
+                name="⚠️ Estado General", 
+                value="**Algunos servicios presentan problemas**",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"Solicitado por {member}")
+        
         await interaction.followup.send(embed=embed, ephemeral=True)
-        # send notification embed to notify channel
         await self._send_notify_embed(embed)
+
+    @app_commands.command(name="reload_config", description="Reload bot configuration from config.json")
+    async def reload_config(self, interaction: discord.Interaction):
+        """Reload bot configuration and notify about changes."""
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            await interaction.response.send_message("Command must be used in a guild by a member.", ephemeral=True)
+            return
+
+        if not self._is_authorized(member):
+            await interaction.response.send_message("You are not authorized to run this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True)
+        
+        try:
+            # Store old config for comparison
+            old_config = dict(self.bot.config)
+            
+            # Reload configuration
+            new_config = self.bot.load_config()
+            
+            if new_config:
+                self.bot.config = new_config
+                
+                # Compare configurations and build change summary
+                changes = []
+                
+                # Check for changed settings
+                for key in set(old_config.keys()) | set(new_config.keys()):
+                    old_val = old_config.get(key)
+                    new_val = new_config.get(key)
+                    
+                    if old_val != new_val:
+                        if key == "events" and isinstance(old_val, dict) and isinstance(new_val, dict):
+                            # Special handling for events dict
+                            for event_key in set(old_val.keys()) | set(new_val.keys()):
+                                old_event = old_val.get(event_key, False)
+                                new_event = new_val.get(event_key, False)
+                                if old_event != new_event:
+                                    status = "✅ Activado" if new_event else "❌ Desactivado"
+                                    changes.append(f"**{event_key}:** {status}")
+                        else:
+                            changes.append(f"**{key}:** {old_val} → {new_val}")
+                
+                # Create notification embed
+                embed = discord.Embed(
+                    title="🔄 Configuración Recargada",
+                    description="La configuración del bot ha sido recargada exitosamente",
+                    color=discord.Color.green(),
+                    timestamp=datetime.utcnow()
+                )
+                
+                if changes:
+                    changes_text = "\n".join(changes[:10])  # Limit to first 10 changes
+                    if len(changes) > 10:
+                        changes_text += f"\n... y {len(changes) - 10} cambios más"
+                    embed.add_field(
+                        name="📝 Cambios Detectados",
+                        value=changes_text,
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name="ℹ️ Estado",
+                        value="No se detectaron cambios en la configuración",
+                        inline=False
+                    )
+                
+                embed.add_field(
+                    name="👤 Solicitado por",
+                    value=str(member),
+                    inline=True
+                )
+                
+                embed.add_field(
+                    name="⏰ Hora",
+                    value=datetime.utcnow().strftime('%H:%M:%S UTC'),
+                    inline=True
+                )
+                
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                await self._send_notify_embed(embed)
+                
+                logger.info(f"Configuration reloaded by {member}, {len(changes)} changes detected")
+                
+            else:
+                # Failed to reload
+                embed = discord.Embed(
+                    title="❌ Error de Configuración",
+                    description="No se pudo recargar la configuración",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(
+                    name="💡 Sugerencia",
+                    value="Verifica que el archivo config.json tenga formato JSON válido",
+                    inline=False
+                )
+                embed.set_footer(text=f"Solicitado por {member}")
+                
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                await self._send_notify_embed(embed)
+                
+        except Exception as e:
+            logger.error(f"Failed to reload configuration: {e}")
+            
+            embed = discord.Embed(
+                title="🔥 Error Crítico",
+                description=f"Error al recargar configuración: {str(e)[:200]}",
+                color=discord.Color.red(),
+                timestamp=datetime.utcnow()
+            )
+            embed.set_footer(text=f"Solicitado por {member}")
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await self._send_notify_embed(embed)
 
     @app_commands.command(name="ready", description="Notify the configured log channel that the bot is ready")
     async def ready(self, interaction: discord.Interaction):

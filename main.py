@@ -73,13 +73,33 @@ def main():
         client = bot.LoggingBot()
         loop = asyncio.get_running_loop()
 
-        def _on_signal():
-            logging.info("Signal received, scheduling bot.close() for graceful shutdown...")
+        async def _on_signal_async():
+            logging.info("Signal received, sending shutdown notification...")
             try:
-                asyncio.create_task(client.close())
+                # Send detailed shutdown notification
+                await client._send_notification(
+                    title="Sentry Bot", 
+                    event="Apagado del Bot", 
+                    extra={
+                        "Tipo de cierre": "Señal recibida",
+                        "Hora de cierre": datetime.utcnow().strftime('%B %d, %Y at %I:%M %p')
+                    }
+                )
+                # Give time for the message to be sent
+                await asyncio.sleep(1)
+            except Exception as e:
+                logging.debug(f"Failed to send shutdown notification: {e}")
+            
+            logging.info("Closing bot...")
+            await client.close()
+
+        def _on_signal():
+            logging.info("Signal received, scheduling graceful shutdown...")
+            try:
+                asyncio.create_task(_on_signal_async())
             except Exception:
                 # If loop is already stopping, ignore
-                logging.debug("Failed to schedule client.close() from signal handler.")
+                logging.debug("Failed to schedule shutdown from signal handler.")
 
         # Register signal handlers (Unix-only; safe on Linux)
         try:

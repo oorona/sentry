@@ -292,14 +292,25 @@ class LoggingBot(commands.Bot):
             if not getattr(self, "_notified_ready", False):
                 # Use notify_channel_id primarily; fall back to log_channel_id if not present
                 notify_key = "notify_channel_id" if self.config.get("notify_channel_id") else "log_channel_id"
-                await self._send_notification(title="Sentry Bot", event="Startup", extra={"Started at": datetime.utcnow().isoformat()}, notify_key=notify_key)
+                await self._send_notification(
+                    title="Sentry Bot", 
+                    event="Bot Iniciado", 
+                    extra={
+                        "Estado": "¡El bot se ha iniciado correctamente y está listo para servir!",
+                        "Hora de Inicio": datetime.utcnow().strftime('%B %d, %Y at %I:%M %p')
+                    }, 
+                    notify_key=notify_key
+                )
                 # Mark as notified regardless to avoid repeated attempts during reconnect storms
                 self._notified_ready = True
         except Exception:
             logging.debug("Readiness notification step encountered an unexpected error.")
 
     async def _build_status_embed(self, title: str, event: str, extra: dict | None = None) -> discord.Embed:
-        """Build an embed with basic bot stats for notifications."""
+        """Build an embed with comprehensive bot stats for notifications."""
+        import psutil
+        import discord as discord_lib
+        
         uptime = datetime.utcnow() - getattr(self, "_start_time", datetime.utcnow())
         guild_count = len(self.guilds)
         # approximate user count by summing unique member ids in cached guilds
@@ -309,83 +320,123 @@ class LoggingBot(commands.Bot):
                 user_ids.add(m.id)
         user_count = len(user_ids)
 
-        embed = discord.Embed(title=title, color=discord.Color.blue(), timestamp=datetime.utcnow())
-        embed.add_field(name="Event", value=event, inline=False)
-        embed.add_field(name="Guilds", value=str(guild_count), inline=True)
-        embed.add_field(name="Known users (cached)", value=str(user_count), inline=True)
-        embed.add_field(name="Cogs loaded", value=str(len(self.extensions)), inline=True)
-        embed.add_field(name="Latency (ms)", value=str(int(self.latency * 1000)) if self.latency else "N/A", inline=True)
-        embed.add_field(name="Uptime", value=str(uptime).split(".")[0], inline=True)
+        # System information
+        try:
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            cpu_percent = process.cpu_percent()
+        except Exception:
+            memory_mb = 0.0
+            cpu_percent = 0.0
 
-        # DB connectivity check (use utils.database.engine if available)
-        db_status = "unknown"
+        # Color based on event type
+        if "shutdown" in event.lower() or "apagado" in event.lower():
+            color = discord.Color.red()
+            emoji = "🔴"
+        elif "startup" in event.lower() or "iniciado" in event.lower():
+            color = discord.Color.green()
+            emoji = "🟢"
+        else:
+            color = discord.Color.blue()
+            emoji = "ℹ️"
+
+        embed = discord.Embed(
+            title=f"{emoji} {title}",
+            description=f"El bot se está {'iniciando' if 'startup' in event.lower() else 'apagando' if 'shutdown' in event.lower() else 'ejecutando'} correctamente...",
+            color=color,
+            timestamp=datetime.utcnow()
+        )
+
+        # Session Statistics
+        uptime_str = str(uptime).split(".")[0]
+        if uptime.total_seconds() < 60:
+            uptime_display = f"{int(uptime.total_seconds())}s"
+        elif uptime.total_seconds() < 3600:
+            uptime_display = f"{int(uptime.total_seconds() // 60)}m {int(uptime.total_seconds() % 60)}s"
+        else:
+            hours = int(uptime.total_seconds() // 3600)
+            minutes = int((uptime.total_seconds() % 3600) // 60)
+            uptime_display = f"{hours}h {minutes}m"
+
+        embed.add_field(
+            name="📊 Estadísticas de Sesión",
+            value=f"**Tiempo Activo:** {uptime_display}\n"
+                  f"**Servidores:** {guild_count}\n"
+                  f"**Usuarios:** {user_count:,}",
+            inline=False
+        )
+
+        # DB connectivity check and event counts
+        db_status = "Desconectado"
+        db_event_count = 0
+        session_events = sum(getattr(self, "_event_counters", {}).values())
+        
         try:
             udb_engine = getattr(udb, 'engine', None)
             if udb_engine is not None:
                 with udb_engine.connect() as conn:
                     conn.execute(text("SELECT 1"))
-                db_status = "ok"
-            else:
-                db_status = "no-engine"
-        except Exception as e:
-            db_status = f"error: {e}"
-
-        embed.add_field(name="Database", value=db_status, inline=False)
-
-        if extra:
-            for k, v in extra.items():
-                embed.add_field(name=str(k), value=str(v), inline=False)
-
-        # Add DB table information if available (use module-level `udb` to avoid local shadowing)
-        try:
-            udb_base = getattr(udb, 'Base', None)
-            tables = list(getattr(udb_base, 'metadata').tables.keys()) if udb_base else []
-            if tables:
-                embed.add_field(name="DB tables", value=", ".join(tables), inline=False)
-        except Exception:
-            # non-fatal if host project doesn't have utils.database
-            pass
-        # Optionally add row counts for tables — potentially slow, so enabled by env var
-        try:
-            read_counts = os.getenv('READ_DB_COUNTS', '0')
-            if str(read_counts).lower() not in ('0', 'false', 'no'):
-                udb_engine = getattr(udb, 'engine', None)
-                if udb_engine is not None:
-                    max_tables = int(os.getenv('DB_COUNT_MAX_TABLES', '10'))
-                    udb_base = getattr(udb, 'Base', None)
-                    table_names = list(getattr(udb_base, 'metadata').tables.keys())[:max_tables] if udb_base else []
-
-                    def _count_table_rows(name):
-                        try:
-                            # Use PostgreSQL statistics for a fast, approximate row estimate.
-                            # reltuples is an estimate maintained by autovacuum/ANALYZE, so
-                            # report it as approximate rather than exact.
-                            q = text("SELECT COALESCE(reltuples::bigint, 0) AS estimate FROM pg_class WHERE relname = :tname")
-                            with udb_engine.connect() as conn:
-                                res = conn.execute(q, {"tname": name})
-                                row = res.fetchone()
-                                if row is None:
-                                    return None
-                                return int(row[0])
-                        except Exception as e:
-                            logger.debug(f"Failed to estimate rows for table {name}: {e}")
-                            return None
-
-                    import asyncio
-                    loop = asyncio.get_running_loop()
-                    # Run each table count in the executor concurrently and await with a timeout.
+                    # Try to count events in log_entries table
                     try:
-                        futures = [loop.run_in_executor(None, _count_table_rows, n) for n in table_names]
-                        results = await asyncio.wait_for(asyncio.gather(*futures), timeout=5)
-                        tc = dict(zip(table_names, results))
-                        # format counts as approximate values
-                        parts = [f"{n}: {tc.get(n) if tc.get(n) is not None else '?'} (approx)" for n in table_names]
-                        if parts:
-                            embed.add_field(name="DB row counts (approx)", value="; ".join(parts), inline=False)
-                    except Exception as e:
-                        logger.debug(f"Timed out or failed while collecting table row counts: {e}")
-        except Exception:
-            pass
+                        result = conn.execute(text("SELECT COUNT(*) FROM log_entries"))
+                        db_event_count = result.scalar() or 0
+                    except Exception:
+                        pass
+                db_status = "Conectado"
+            else:
+                db_status = "Sin motor"
+        except Exception as e:
+            db_status = f"Error: {str(e)[:50]}"
+
+        embed.add_field(
+            name="🗄️ Base de Datos",
+            value=f"**Estado:** {db_status}\n"
+                  f"**Eventos:** {db_event_count:,}\n"
+                  f"**Sesión:** {session_events:,}",
+            inline=False
+        )
+
+        # System Information
+        embed.add_field(
+            name="💻 Sistema",
+            value=f"**Discord.py:** {discord_lib.__version__}\n"
+                  f"**Latencia:** {int(self.latency * 1000) if self.latency else 'N/A'} ms\n"
+                  f"**CPU:** {cpu_percent:.1f}%\n"
+                  f"**Memoria:** {memory_mb:.1f} MB",
+            inline=False
+        )
+
+        # Process Information based on event type
+        health_port = self.config.get("health_port", 8080)
+        if "shutdown" in event.lower():
+            embed.add_field(
+                name="🔄 Proceso de Apagado",
+                value=f"**Tipo:** Activado por señal\n"
+                      f"**Recursos:** Limpiando\n"
+                      f"**Salud:** Puerto cerrando",
+                inline=False
+            )
+        else:
+            sync_status = "Sincronizados" if getattr(self, "_commands_synced", False) else "Pendientes"
+            cogs_loaded = len(self.extensions)
+            embed.add_field(
+                name="🚀 Proceso de Inicio",
+                value=f"**Servidor de Salud:** Ejecutándose (:{health_port})\n"
+                      f"**Cogs:** {cogs_loaded} cargados\n"
+                      f"**Comandos:** {sync_status}",
+                inline=False
+            )
+
+        # Add extra information if provided
+        if extra:
+            extra_info = []
+            for k, v in extra.items():
+                extra_info.append(f"**{k}:** {v}")
+            if extra_info:
+                embed.add_field(name="ℹ️ Información Adicional", value="\n".join(extra_info), inline=False)
+
+        # Footer with timestamp
+        embed.set_footer(text=f"Sentry Bot • {datetime.utcnow().strftime('%B %d, %Y at %I:%M %p')}")
 
         return embed
 
@@ -438,9 +489,17 @@ class LoggingBot(commands.Bot):
     async def close(self):
         """Override close to send a shutdown notification before closing the bot."""
         try:
-            await self._send_notification(title="Sentry Bot", event="Shutdown", extra={"Closing at": datetime.utcnow().isoformat()})
+            await self._send_notification(
+                title="Sentry Bot", 
+                event="Apagado del Bot", 
+                extra={
+                    "Estado": "El bot se está apagando correctamente...",
+                    "Hora de cierre": datetime.utcnow().strftime('%B %d, %Y at %I:%M %p'),
+                    "Tipo": "Cierre programático"
+                }
+            )
             # allow small time window for the message to be delivered
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.5)
         except Exception:
             logging.debug("Error while sending shutdown notification; proceeding to close.")
         # Call the parent close

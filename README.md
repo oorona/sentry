@@ -51,25 +51,26 @@ For the bot to function correctly and log all desired events, you need to config
 
 When creating your bot's invitation link (in the Discord Developer Portal under `OAuth2` -> `URL Generator`), select the following permissions:
 
-* **General Permissions:**
-    * `View Channels`
-    * `Send Messages`
-    * `Embed Links` (Essential for formatted log messages)
-    * `Read Message History`
-    * `View Audit Log` (Highly recommended for detailed administrative action logs)
-* **Membership Permissions:**
-    * `Kick Members`
-    * `Ban Members`
-    * `Manage Nicknames`
-* **Text Channel Permissions:**
-    * `Manage Channels`
-    * `Manage Webhooks`
-* **Role Permissions:**
-    * `Manage Roles`
-* **Voice Channel Permissions:**
-    * `Mute Members`
-    * `Deafen Members`
-    * `Move Members`
+When generating the OAuth2 invite for the bot, choose a minimal set to operate and a few recommended permissions for full auditing and management features.
+
+Required (minimum for core logging functionality):
+
+- `View Channels` — allow the bot to see channels so it can post and monitor events.
+- `Send Messages` — allow posting logs to the configured log/notify channel.
+- `Embed Links` — required to send nicely formatted embed messages used for logs.
+- `Read Message History` — helpful when showing message edit/delete context.
+
+Recommended (enable these to get full audit and admin-context features):
+
+- `View Audit Log` — required to resolve "who" performed administrative or moderation actions (role/channel changes, kicks, bans, member unbans, etc.). This permission is the single most important one for capturing actor information. If the bot lacks this, the bot can still detect that an action occurred but won't be able to reliably report which user performed it.
+- `Manage Roles` — needed if the bot will itself modify roles or needs to fetch additional role metadata for reports; optional for read-only logging but useful when closely integrating with role workflows.
+- `Manage Channels` — recommended when the bot is expected to manage or reliably observe channel lifecycle events. Not strictly required for read-only logging of channel deletions/creations, but helpful for automation.
+- `Manage Webhooks` — useful if you plan to route logs via webhooks or create helper webhooks for cross-service integrations.
+- `Kick Members`, `Ban Members` — note: these permissions are required for the bot to perform kicks/bans itself. They are NOT required for the bot to detect that a kick/ban occurred; detecting and reporting the actor who performed the kick/ban requires `View Audit Log`.
+- `Mute Members`, `Deafen Members`, `Move Members` — required only if the bot will perform voice moderation actions; otherwise these are optional and primarily relevant if you want the bot to act rather than just observe voice-related changes.
+
+In short: to capture "who" performed moderation actions, grant `View Audit Log`. Grant Kick/Ban/Mute/etc. only if you expect the bot to perform those actions itself.
+You can select all (or a subset) depending on your deployment needs; enabling `View Audit Log` is highly recommended for richer logs.
 
 [url](https://discord.com/oauth2/authorize?client_id=1423368489703440648&permissions=968977558&integration_type=0&scope=bot)
 
@@ -86,6 +87,35 @@ Additionally, ensure your bot's code (which uses `discord.Intents.default()`) im
 * `GUILDS`
 * `GUILD_MESSAGES`
 * `GUILD_VOICE_STATES`
+
+### 3.2.3 Application Commands (Slash Commands)
+
+This bot uses Discord Application Commands (slash commands). These commands must be registered with Discord and can be registered either globally (available in all guilds after propagation delay) or per-guild (instant availability for a specific guild).
+
+Key points:
+
+- Scopes: When generating the OAuth2 invite URL, ensure `applications.commands` is included in the scopes so the application can register slash commands.
+- Guild vs Global:
+  - **Guild-scoped registration** (fast): Commands registered to a guild are available almost immediately (useful for development).
+  - **Global registration** (slow): Global commands can take up to an hour to propagate but are available across all guilds.
+- Env vars / config keys used by this project:
+  - `GUILD_ID` / `guild_id` (config.json) — the development guild where commands can be registered quickly.
+  - `DEV_GUILD_ONLY` — when truthy, the bot will attempt to register commands only in the provided dev guild for fast testing.
+  - `EXPECTED_COMMAND_NAME` — optional override for expected command name used by the on_ready sync diagnostics (not generally required; the bot now detects missing local commands automatically).
+
+Debugging tips:
+
+- Look at the bot's `on_ready` logs. The bot logs pre-sync commands present in the tree, guild sync results, and global sync info. Example lines to watch for:
+  - "Pre-sync commands present in tree: ..."
+  - "Attempting to sync application commands to guild ..."
+  - "Application commands synced to guild ... synced_count=..."
+  - "Synced command names: ..."
+  - "Guild-synced commands missing local commands: ...; attempting global sync as fallback."
+- Use the admin slash command `/debug_sync` (available to configured admin roles) to run the same sync workflow on-demand and return a diagnostic summary. If `/debug_sync` reports no commands or empty lists, check the bot's cogs and ensure commands are defined and loaded before sync runs.
+- If commands appear in global sync but not in guild sync, try `tree.copy_global_to(guild)` followed by a guild sync — the bot automatically attempts copy and will log the result.
+- Permissions & application owner: Make sure you're using the correct bot token (OAuth2 application) and that the application registration in the Developer Portal matches the token being used by the running process. Token/app mismatches are a common cause of missing commands.
+
+If you want, I can add a `/sync_status` command to the admin cog that returns the current command names in the tree and what the bot sees as registered; this can simplify debugging without reading logs.
 
 ### 3.3 Project Structure
 

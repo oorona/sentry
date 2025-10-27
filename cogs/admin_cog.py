@@ -11,6 +11,31 @@ class AdminCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def _send_notify_embed(self, embed: discord.Embed):
+        """Send an embed to the configured notify channel (notify_channel_id) if available."""
+        channel_id = self.bot.config.get("notify_channel_id") or self.bot.config.get("log_channel_id")
+        if not channel_id:
+            logger.debug("No notify_channel_id configured; skipping notify embed send.")
+            return False
+        try:
+            chan_id = int(channel_id)
+        except Exception:
+            logger.warning(f"notify_channel_id is not an integer: {channel_id}")
+            return False
+
+        try:
+            channel = self.bot.get_channel(chan_id)
+            if channel is None:
+                channel = await self.bot.fetch_channel(chan_id)
+            if not channel:
+                logger.warning(f"Could not find notify channel {chan_id}")
+                return False
+            await channel.send(embed=embed)
+            return True
+        except Exception as e:
+            logger.exception(f"Failed to send notify embed to {chan_id}: {e}")
+            return False
+
     def _is_authorized(self, member: discord.Member) -> bool:
         """Authorize by role IDs (config: admin_role_ids). Role IDs are strings in config.json."""
         # config now contains integers (validated at bot startup)
@@ -109,8 +134,11 @@ class AdminCog(commands.Cog):
         embed = discord.Embed(title="Sentry Status", color=discord.Color.blue())
         embed.add_field(name="HTTP /health", value=http_status, inline=False)
         embed.add_field(name="Database", value=("ok" if db_ok else f"error: {db_err}"), inline=False)
+        embed.set_footer(text=f"Requested by {member}")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        # send notification embed to notify channel
+        await self._send_notify_embed(embed)
 
     @app_commands.command(name="ready", description="Notify the configured log channel that the bot is ready")
     async def ready(self, interaction: discord.Interaction):
@@ -135,8 +163,11 @@ class AdminCog(commands.Cog):
             return
 
         try:
-            await channel.send("Bot readiness notified by /ready command")
-            await interaction.response.send_message("Notified log channel.", ephemeral=True)
+            embed = discord.Embed(title="Sentry Bot - Manual Ready", color=discord.Color.green())
+            embed.add_field(name="Action", value="Manual readiness notified", inline=False)
+            embed.set_footer(text=f"Requested by {member}")
+            await self._send_notify_embed(embed)
+            await interaction.response.send_message("Notified notify channel.", ephemeral=True)
         except Exception as e:
             logging.error(f"Failed to notify log channel: {e}")
             await interaction.response.send_message(f"Failed to notify log channel: {e}", ephemeral=True)
@@ -162,14 +193,20 @@ class AdminCog(commands.Cog):
                     dev_guild = None
 
             synced_info = []
+            embed = discord.Embed(title="Sentry Sync Results", color=discord.Color.blue())
             if dev_guild:
                 guild_obj = discord.Object(id=dev_guild)
                 guild_cmds = await self.bot.tree.sync(guild=guild_obj)
                 synced_info.append(f"Guild {dev_guild}: {len(guild_cmds)} commands")
+                embed.add_field(name=f"Guild {dev_guild}", value=str(len(guild_cmds)), inline=False)
 
             global_cmds = await self.bot.tree.sync()
             synced_info.append(f"Global: {len(global_cmds)} commands")
-            await interaction.followup.send("Sync complete.\n" + "\n".join(synced_info), ephemeral=True)
+            embed.add_field(name="Global", value=str(len(global_cmds)), inline=False)
+            embed.set_footer(text=f"Requested by {member}")
+
+            await interaction.followup.send("Sync complete.", ephemeral=True)
+            await self._send_notify_embed(embed)
         except Exception as e:
             await interaction.followup.send(f"Failed to sync commands: {e}", ephemeral=True)
 
@@ -197,14 +234,19 @@ class AdminCog(commands.Cog):
             await interaction.followup.send("No application commands registered (or none cached).", ephemeral=True)
             return
 
+        # Send ephemeral full list to invoker and a summary embed to notify channel
         msg = "Registered application commands:\n" + "\n".join(cmds)
-        # split if too long
         if len(msg) > 1900:
-            chunks = [msg[i:i+1900] for i in range(0, len(msg), 1900)]
-            for chunk in chunks:
-                await interaction.followup.send(f"```\n{chunk}\n```", ephemeral=True)
+            await interaction.followup.send("Registered application commands too long to show; sent summary to notify channel.", ephemeral=True)
         else:
             await interaction.followup.send(f"```\n{msg}\n```", ephemeral=True)
+
+        embed = discord.Embed(title="Registered Application Commands", color=discord.Color.blue())
+        embed.add_field(name="Command count", value=str(len(cmds)), inline=False)
+        sample = "\n".join(cmds[:10])
+        embed.add_field(name="Sample", value=f"```\n{sample}\n```" if sample else "None", inline=False)
+        embed.set_footer(text=f"Requested by {member}")
+        await self._send_notify_embed(embed)
 
     @app_commands.command(name="diagnose", description="Show diagnostics: loaded cogs, app commands, guilds, event counters")
     async def diagnose(self, interaction: discord.Interaction):
@@ -239,7 +281,16 @@ class AdminCog(commands.Cog):
         for k, v in counters.items():
             lines.append(f"{k}: {v}")
 
+        # ephemeral to invoker
         await interaction.followup.send("```\n" + "\n".join(lines) + "\n```", ephemeral=True)
+        # notify channel embed
+        embed = discord.Embed(title="Sentry Diagnose", color=discord.Color.blue())
+        for l in lines:
+            if ":" in l:
+                k, v = l.split(":", 1)
+                embed.add_field(name=k.strip(), value=v.strip(), inline=False)
+        embed.set_footer(text=f"Requested by {member}")
+        await self._send_notify_embed(embed)
 
 
     @app_commands.command(name="debug_sync", description="(debug) run sync steps and report detailed results")
@@ -293,7 +344,13 @@ class AdminCog(commands.Cog):
         else:
             results.append("No guild_id configured; skipping guild copy/sync steps.")
 
+        # ephemeral reply
         await interaction.followup.send("\n".join(results), ephemeral=True)
+        # send notification embed summarizing results
+        embed = discord.Embed(title="Debug Sync Results", color=discord.Color.blue())
+        embed.add_field(name="Summary", value="; ".join(results[:10]), inline=False)
+        embed.set_footer(text=f"Requested by {member}")
+        await self._send_notify_embed(embed)
 
 
 async def setup(bot):

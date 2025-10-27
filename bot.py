@@ -212,16 +212,49 @@ class LoggingBot(commands.Bot):
                     logger.info("Pre-sync: no commands present in tree.")
 
                 if dev_guild and dev_guild_only:
-                    guild_obj = discord.Object(id=dev_guild)
+                    # Use the more robust guild-sync approach (log names and fallback to global sync
+                    # if the expected command isn't present). This was proven in another project.
+                    guild_id = dev_guild
+                    logger.debug("Attempting to sync application commands to guild %s", guild_id)
                     try:
-                        logger.info(f"DEV_GUILD_ONLY mode enabled; syncing commands to guild {dev_guild} only...")
-                        # Sync the tree to the guild directly (registers commands on that guild)
-                        synced_guild_cmds = await self.tree.sync(guild=guild_obj)
-                        logger.info(f"Application commands synced to guild {dev_guild}: {len(synced_guild_cmds)} commands.")
-                        if synced_guild_cmds:
-                            logger.info(f"Guild-synced commands: {[c.name for c in synced_guild_cmds]}")
-                    except Exception as e:
-                        logger.warning(f"Guild-only sync to {dev_guild} failed: {e}")
+                        synced = await self.tree.sync(guild=discord.Object(id=guild_id))
+                        logger.info("Application commands synced to guild %s. synced_count=%d", guild_id, len(synced))
+                        try:
+                            names = [c.name for c in synced]
+                            logger.info("Synced command names: %s", ", ".join(names))
+                        except Exception:
+                            logger.exception("Failed to enumerate synced commands")
+
+                        # Build sets of names from the guild-synced commands (name and qualified_name)
+                        try:
+                            synced_names = set([getattr(c, 'name', None) for c in synced if getattr(c, 'name', None)]) | set([getattr(c, 'qualified_name', None) for c in synced if getattr(c, 'qualified_name', None)])
+                        except Exception:
+                            synced_names = set([getattr(c, 'name', None) for c in synced if getattr(c, 'name', None)])
+
+                        # Build the set of locally defined command names we expect to exist (name and qualified_name)
+                        local_cmds = list(self.tree.walk_commands())
+                        try:
+                            local_names = set([getattr(c, 'name', None) for c in local_cmds if getattr(c, 'name', None)]) | set([getattr(c, 'qualified_name', None) for c in local_cmds if getattr(c, 'qualified_name', None)])
+                        except Exception:
+                            local_names = set([getattr(c, 'name', None) for c in local_cmds if getattr(c, 'name', None)])
+
+                        # If any local command is missing from the guild-synced set, fallback to a global sync
+                        missing = local_names - synced_names
+                        if missing:
+                            logger.info("Guild-synced commands missing local commands: %s; attempting global sync as fallback.", ", ".join(sorted(list(missing))[:50]))
+                            try:
+                                global_synced = await self.tree.sync()
+                                logger.info("Global sync completed. total_global_synced=%d", len(global_synced))
+                                try:
+                                    gnames = [c.name for c in global_synced]
+                                    logger.info("Global synced command names sample: %s", ", ".join(gnames[:50]))
+                                except Exception:
+                                    logger.exception("Failed to enumerate global synced commands")
+                            except Exception:
+                                logger.exception("Global sync fallback failed")
+
+                    except Exception:
+                        logger.exception("Failed to sync application commands to guild %s", guild_id)
                 else:
                     # Default behavior: ensure global commands exist, then optionally copy to dev guild
                     try:

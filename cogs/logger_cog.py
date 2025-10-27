@@ -160,19 +160,52 @@ class LoggerCog(commands.Cog):
     async def on_member_remove(self, member):
         if not self.bot.config["events"].get("on_member_remove"):
             return
-        await self._add_log("member_remove", member, f"{member.mention} left the server.", member.guild, color=discord.Color.orange())
+        # Try to detect if this remove was a kick by checking the audit logs
+        actor = None
+        try:
+            actor = await self._get_audit_actor(member.guild, discord.AuditLogAction.kick, target_id=getattr(member, 'id', None))
+        except Exception:
+            actor = None
+
+        if actor:
+            desc = f"{member.mention} was kicked by {actor.mention}."
+            await self._add_log("member_kick", actor, desc, member.guild, color=discord.Color.red())
+        else:
+            await self._add_log("member_remove", member, f"{member.mention} left the server.", member.guild, color=discord.Color.orange())
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild, user):
         if not self.bot.config["events"].get("on_member_ban"):
             return
-        await self._add_log("member_ban", user, f"{user.mention} was banned.", guild, color=discord.Color.red())
+        # Attempt to find who performed the ban via audit logs
+        actor = None
+        try:
+            actor = await self._get_audit_actor(guild, discord.AuditLogAction.ban, target_id=getattr(user, 'id', None))
+        except Exception:
+            actor = None
+
+        if actor:
+            desc = f"{user.mention} was banned by {actor.mention}."
+            await self._add_log("member_ban", actor, desc, guild, color=discord.Color.red())
+        else:
+            await self._add_log("member_ban", user, f"{user.mention} was banned.", guild, color=discord.Color.red())
 
     @commands.Cog.listener()
     async def on_member_unban(self, guild, user):
         if not self.bot.config["events"].get("on_member_unban"):
             return
-        await self._add_log("member_unban", user, f"{user.mention} was unbanned.", guild, color=discord.Color.light_grey())
+        # Attempt to find who performed the unban via audit logs
+        actor = None
+        try:
+            actor = await self._get_audit_actor(guild, discord.AuditLogAction.unban, target_id=getattr(user, 'id', None))
+        except Exception:
+            actor = None
+
+        if actor:
+            desc = f"{user.mention} was unbanned by {actor.mention}."
+            await self._add_log("member_unban", actor, desc, guild, color=discord.Color.light_grey())
+        else:
+            await self._add_log("member_unban", user, f"{user.mention} was unbanned.", guild, color=discord.Color.light_grey())
 
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
@@ -180,7 +213,19 @@ class LoggerCog(commands.Cog):
             return
         # Nickname change
         if before.nick != after.nick:
-            await self._add_log("nickname_change", after, f"{after.mention}'s nickname was changed.", after.guild, details={"Before": before.nick or "None", "After": after.nick or "None"}, color=discord.Color.purple())
+            # Try to see if an admin changed the nickname (audit log entry)
+            actor = None
+            try:
+                actor = await self._get_audit_actor(after.guild, discord.AuditLogAction.member_update, target_id=getattr(after, 'id', None))
+            except Exception:
+                actor = None
+
+            details = {"Before": before.nick or "None", "After": after.nick or "None"}
+            if actor and actor.id != after.id:
+                desc = f"{after.mention}'s nickname was changed by {actor.mention}."
+                await self._add_log("nickname_change", actor, desc, after.guild, details=details, color=discord.Color.purple())
+            else:
+                await self._add_log("nickname_change", after, f"{after.mention}'s nickname was changed.", after.guild, details=details, color=discord.Color.purple())
         # Role change
         if before.roles != after.roles:
             added_roles = [r.name for r in after.roles if r not in before.roles]

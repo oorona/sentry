@@ -1,3 +1,13 @@
 .env
 .github
 .git
+
+# Ignore secrets directory so real secrets aren't committed
+secrets/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Docker
+docker-compose.override.yml

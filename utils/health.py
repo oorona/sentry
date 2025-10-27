@@ -1,13 +1,17 @@
 from aiohttp import web
 import asyncio
 import logging
-from utils.database import engine
+logger = logging.getLogger(__name__)
+import utils.database as udb
 from sqlalchemy import text
 
 
 def _sync_db_check():
     try:
-        with engine.connect() as conn:
+        udb_engine = getattr(udb, 'engine', None)
+        if udb_engine is None:
+            return False, 'no-engine'
+        with udb_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return True, None
     except Exception as e:
@@ -24,7 +28,7 @@ async def health_handler(request):
     if ok:
         return web.json_response({"status": "ok"}, status=200)
     else:
-        logging.warning(f"Health check failed: {err}")
+        logger.warning(f"Health check failed: {err}")
         return web.json_response({"status": "unhealthy", "error": err}, status=503)
 
 
@@ -35,7 +39,7 @@ async def start_health_server(host: str = "0.0.0.0", port: int = 8080):
     await runner.setup()
     site = web.TCPSite(runner, host, port)
     await site.start()
-    logging.info(f"Health server running on http://{host}:{port}/health")
+    logger.info(f"Health server running on http://{host}:{port}/health")
     # Keep the coroutine alive
     while True:
         await asyncio.sleep(3600)

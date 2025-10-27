@@ -2,15 +2,25 @@
 services:
   sentry:
     build: .
+    image: sentry:latest
     container_name: sentry
     restart: unless-stopped
     env_file:
       - .env
     volumes:
       - ./config.json:/app/config.json 
+    secrets:
+      - discord_token
+      - postgres_password
     networks:
       - dbnet
 
 networks:
   dbnet:
     external: true 
+
+secrets:
+  discord_token:
+    file: ./secrets/discord_token.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt

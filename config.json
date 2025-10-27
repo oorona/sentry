@@ -1,5 +1,6 @@
 {
-  "log_channel_id": 818314886895501345,
+  "log_channel_id": 1423821498082398229,
+  "notify_channel_id": 1425165578825371799,
   "events": {
     "// --- Member Events ---": "--------------------",
     "on_member_join": true,

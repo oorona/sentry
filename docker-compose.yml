@@ -2,7 +2,7 @@
 services:
   sentry:
     build: .
-    image: sentry:latest
+    image: sentry
     container_name: sentry
     restart: unless-stopped
     env_file:

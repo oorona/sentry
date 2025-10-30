@@ -14,6 +14,7 @@ services:
       - postgres_password
     networks:
       - dbnet
+      - bot
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 30s
@@ -24,6 +25,8 @@ services:
 networks:
   dbnet:
     external: true 
+  bot:
+    external: true
 
 secrets:
   discord_token:
